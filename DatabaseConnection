@@ -1,0 +1,471 @@
+using log4net;
+using MySql.Data.MySqlClient;
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using Intellect.Unite.CaptureTools.Model;
+using log4net;
+using Microsoft.Extensions.Configuration;
+using MySqlX.XDevAPI;
+using Org.BouncyCastle.Utilities;
+using static System.Runtime.InteropServices.JavaScript.JSType;
+using System.Transactions;
+using System.Data.Common;
+using System.Threading;
+using System.Collections;
+
+
+namespace Intellect.Unite.CaptureTools.BL
+{
+    public class ApprovalMasterforDCCBBranchBL : IDisposable
+    {
+        ILog log = LogManager.GetLogger(typeof(ApprovalMasterforDCCBBranchBL));
+
+        MySqlConnection myconn;
+        MySqlCommand Mycmd;
+        string Connectionstring;
+        private MySqlConnectionStringBuilder mySqlConnectionStringBuilder;
+
+        public void Dispose()
+        {
+            if (this.myconn != null && this.myconn.State == ConnectionState.Open)
+            {
+                this.myconn.Close();
+                this.myconn.Dispose();
+                this.myconn = null;
+            }
+        }
+        public ApprovalMasterforDCCBBranchBL(string culture)
+        {
+            Connectionstring = new ConfigurationBuilder().AddJsonFile("appsettings.json", true, false).Build().GetSection("ConnectionStrings:UniteToolsDatabaseConn").Value;
+            var dbname = new ConfigurationBuilder().AddJsonFile("appsettings.json", true, false).Build().GetSection("ConnectionStrings:ToolsDataBaseName").Value;
+
+            mySqlConnectionStringBuilder = new MySqlConnectionStringBuilder();
+            mySqlConnectionStringBuilder.ConnectionString = Connectionstring;
+            mySqlConnectionStringBuilder.Database = dbname;
+            
+            Thread.CurrentThread.CurrentCulture = new System.Globalization.CultureInfo(culture == null ? "en-GB" : culture);
+            Thread.CurrentThread.CurrentUICulture = Thread.CurrentThread.CurrentCulture;
+            var v = new System.Globalization.DateTimeFormatInfo();
+            v.ShortDatePattern = "dd/MM/yyyy";
+            Thread.CurrentThread.CurrentUICulture.DateTimeFormat = v;
+        }
+
+        public List<ApprovalMasterforDCCBBranch> GetPacDetailsbyDCCBBR(int? DCCBBrID, int? DistrictID, int? StateID)
+        {
+
+            DataTable dtdccbdetails = new DataTable("DCCB");
+            string sqlquery = string.Empty;
+            try
+            {
+                using (myconn = new MySqlConnection(mySqlConnectionStringBuilder.ConnectionString))
+                {
+                    sqlquery = @"select * from cm_pacsdetails where dccbbrid=@DCCBBrID and DistrictID=@DistrictID and StateID=@StateID";
+                    using (MySqlCommand cmd = new MySqlCommand(sqlquery, myconn))
+                    {
+                        cmd.Parameters.AddWithValue("@DCCBBrID", DCCBBrID);
+                        cmd.Parameters.AddWithValue("@DistrictID", DistrictID);
+                        cmd.Parameters.AddWithValue("@StateID", StateID);
+                        if (myconn.State == ConnectionState.Closed) { myconn.Open(); }
+                        using (MySqlDataAdapter da = new MySqlDataAdapter(cmd))
+                        {
+                            da.SelectCommand.CommandTimeout = 0;
+                            da.Fill(dtdccbdetails);
+                        }
+                    }
+                }
+            }
+
+            catch (Exception ex)
+            {
+                log.Error("Error in GetPacDetailsbyDCCBBR - " + ex);
+            }
+
+            List<ApprovalMasterforDCCBBranch> pacDetailsList = ConvertDataTableToList(dtdccbdetails);
+            return pacDetailsList;
+
+        }
+
+        public List<ApprovalMasterforDCCBBranch> ConvertDataTableToList(DataTable dataTable)
+        {
+            List<ApprovalMasterforDCCBBranch> pacDetailsList = new List<ApprovalMasterforDCCBBranch>();
+
+            foreach (DataRow row in dataTable.Rows)
+            {
+                ApprovalMasterforDCCBBranch pacDetails = new ApprovalMasterforDCCBBranch
+                {
+                    pacsId = Convert.ToInt64(row["PacsId"]),
+                    pacsName = row["PacShortName"].ToString(),
+                    // Initialize other properties based on your cm_pacsdetails table columns
+                };
+
+                pacDetailsList.Add(pacDetails);
+            }
+
+            return pacDetailsList;
+        }
+
+        public List<ApprovalMasterforDCCBBranch> ConvertDataTableTogridviewList(DataTable dataTable)
+        {
+            List<ApprovalMasterforDCCBBranch> gridviewList = new List<ApprovalMasterforDCCBBranch>();
+
+            foreach (DataRow row in dataTable.Rows)
+            {
+                ApprovalMasterforDCCBBranch gridview = new ApprovalMasterforDCCBBranch
+                {
+                    productid = Convert.ToInt32(row["productid"]),
+                    producttypeid = Convert.ToInt32(row["ProductTypeID"]),
+                    productname = row["productname"].ToString(),
+                    reportid = Convert.ToInt32(row["reportid"]),                  
+                    reportname = row["reportname"].ToString(),
+                    IsApproved = Convert.ToBoolean(row["approved"]),
+                    status = row["approved"].ToString() == "1" ? "Approved" : "Yet to be approved",
+
+                    // Initialize other properties based on your cm_pacsdetails table columns
+                };
+
+                if (gridview.producttypeid == 1)
+                {
+                    gridview.productname = "Membership";
+                }
+
+                if (gridview.producttypeid == 2)
+                {
+                    gridview.productname = "Deposits";
+                }
+
+                if (gridview.producttypeid == 3)
+                {
+                    gridview.productname = "Loans";
+                }
+
+                if (gridview.producttypeid == 11)
+                {
+                    gridview.productname = "Term Deposits";
+                }
+
+                gridviewList.Add(gridview);
+            }
+
+            return gridviewList;
+        }
+
+
+
+        public List<ApprovalMasterforDCCBBranch> GetGriddatabyDCCBBR(long pacsid)
+        {
+
+            DataTable dtdccbdetails = new DataTable("GridDetails");
+            string sqlquery = string.Empty;
+            string sqlquery1 = string.Empty;
+            try
+            {
+                using (myconn = new MySqlConnection(mySqlConnectionStringBuilder.ConnectionString))
+                {
+                    sqlquery = @"select ad.* from (SELECT am.*, true AS approved FROM approvereportsmaster am " +
+                        "WHERE am.productid IN (SELECT productid FROM approvereportsbydccb WHERE pacsid = @pacsid) " +
+                        "UNION " +
+                        "SELECT am.*, false AS approved FROM approvereportsmaster am " +
+                        "WHERE am.productid NOT IN (SELECT productid FROM approvereportsbydccb WHERE pacsid = @pacsid)) ad where pacsid = @pacsid";
+
+                    sqlquery1 = @"SELECT am.*, true AS approved from
+    (SELECT c.ProductCode AS productid,c.ProductTypeID, c.productname AS productname, c.PacsIDPKey AS pacsid, c.ProductDescription AS reportname,
+           CASE 
+               WHEN c.ProductCode IN (SELECT ProductCode FROM UniteCaptureTools.cm_productmaster WHERE producttypeid = 11) THEN '501'
+               WHEN c.ProductCode IN (SELECT ProductCode FROM cm_productmaster WHERE producttypeid = 3 AND LoanType = 1) THEN '302'
+               WHEN c.ProductCode IN (SELECT ProductCode FROM cm_productmaster WHERE producttypeid = 3 AND LoanType = 2) THEN '303'  
+               WHEN c.ProductCode IN (SELECT ProductCode FROM UniteCaptureTools.cm_productmaster WHERE producttypeid = 3 AND LoanType = 3) THEN '305'
+               ELSE d.ReportID
+           END AS reportid
+    FROM (
+        SELECT a.ProductCode, a.ProductDescription AS productname, a.PacsIDPKey, b.ProductDescription, b.ProductTypeID
+        FROM UniteCaptureTools.tools_profiledetails a
+        JOIN UniteCaptureTools.cm_productmaster b ON a.ProductCode = b.ProductCode  
+    ) c
+    LEFT JOIN UniteCaptureTools.product_reports d ON c.ProductCode = d.ProductCode
+    
+WHERE c.PacsIDPKey = @pacsid AND c.ProductCode IN (
+    SELECT productid FROM approvereportsbydccb WHERE pacsid =@pacsid))am
+    
+    union
+    
+    SELECT am.*, false AS approved from
+    (SELECT c.ProductCode AS productid,c.ProductTypeID, c.productname AS productname, c.PacsIDPKey AS pacsid, c.ProductDescription AS reportname,
+           CASE 
+               WHEN c.ProductCode IN (SELECT ProductCode FROM UniteCaptureTools.cm_productmaster WHERE producttypeid = 11) THEN '501'
+               WHEN c.ProductCode IN (SELECT ProductCode FROM cm_productmaster WHERE producttypeid = 3 AND LoanType = 1) THEN '302'
+               WHEN c.ProductCode IN (SELECT ProductCode FROM cm_productmaster WHERE producttypeid = 3 AND LoanType = 2) THEN '303'  
+               WHEN c.ProductCode IN (SELECT ProductCode FROM UniteCaptureTools.cm_productmaster WHERE producttypeid = 3 AND LoanType = 3) THEN '305'
+               ELSE d.ReportID
+           END AS reportid
+    FROM (
+        SELECT a.ProductCode, a.ProductDescription AS productname, a.PacsIDPKey, b.ProductDescription, b.ProductTypeID
+        FROM UniteCaptureTools.tools_profiledetails a
+        JOIN UniteCaptureTools.cm_productmaster b ON a.ProductCode = b.ProductCode  
+    ) c
+    LEFT JOIN UniteCaptureTools.product_reports d ON c.ProductCode = d.ProductCode
+    
+WHERE c.PacsIDPKey = @pacsid AND c.ProductCode NOT IN (
+    SELECT productid FROM approvereportsbydccb WHERE pacsid =@pacsid))am";
+
+
+                    using (MySqlCommand cmd = new MySqlCommand(sqlquery1, myconn))
+                    {
+                        cmd.Parameters.AddWithValue("@pacsid", pacsid);
+                        if (myconn.State == ConnectionState.Closed) { myconn.Open(); }
+                        using (MySqlDataAdapter da = new MySqlDataAdapter(cmd))
+                        {
+                            da.SelectCommand.CommandTimeout = 0;
+                            da.Fill(dtdccbdetails);
+                        }
+                    }
+                }
+            }
+
+            catch (Exception ex)
+            {
+                log.Error("Error in GetPacDetailsbyDCCBBR - " + ex);
+            }
+
+            List<ApprovalMasterforDCCBBranch> gridview = ConvertDataTableTogridviewList(dtdccbdetails);
+            return gridview;
+
+        }
+
+    
+        public bool SaveApprovedDetails(SignOffViewModel viewModel)
+        {
+            using (MySqlConnection myconn = new MySqlConnection(mySqlConnectionStringBuilder.ConnectionString))
+            {
+                try
+                {
+                    myconn.Open();
+                    using (MySqlTransaction transaction = myconn.BeginTransaction())
+                    {
+                        foreach (var item in viewModel.Items)
+                        {
+                            if (item.ProductId != 0) // Check if IsApproved is true
+                            {
+                                if (item.IsApproved) // Check if IsApproved is true
+                                {
+                                    string insertQuery = "INSERT INTO approvereportsbydccb (reportid, pacsid, status,productid) " +
+                                                 "VALUES (@reportid, @pacsid, @status,@productid)";
+                                    using (MySqlCommand cmd = new MySqlCommand(insertQuery, myconn, transaction))
+                                    {
+                                        cmd.Parameters.AddWithValue("@reportid", item.ReportId);
+                                        cmd.Parameters.AddWithValue("@productid", item.ProductId);
+                                        cmd.Parameters.AddWithValue("@pacsid", viewModel.SelectedPacs);
+                                        cmd.Parameters.AddWithValue("@status", item.IsApproved);
+                                        cmd.ExecuteNonQuery();
+                                    }
+                                }
+                            }
+                        }
+
+                        transaction.Commit();
+                        return true;
+                    
+                    }
+                }
+                catch (Exception ex)
+                {
+                    
+                    // Log the exception details for debugging and analysis
+                   Console.WriteLine("Error in SaveApprovedDetails: " + ex.Message);
+                   return false;
+                   
+                }
+            }
+        }
+
+        public List<LegacyDataSignOff> GetDetailsbyDistrict(int? DistrictID, int? StateID)
+        {
+            List<LegacyDataSignOff> pdlist = new List<LegacyDataSignOff>();
+            using (var conn = new MySqlConnection(mySqlConnectionStringBuilder.ConnectionString))
+            {
+                try
+                {
+                    conn.Open();
+                    string sqlquery = "select x.Pkey,y.DCCBPkey,y.DCCBName from (select distinct Pkey , DCCBCode from cm_dccbbranchmaster where pkey = @pkey )x join cm_dccbmaster y on x.DCCBCode = y.DCCBPkey";
+                    using (MySqlCommand cmd = new MySqlCommand(sqlquery, conn))
+                    {
+                        cmd.Parameters.AddWithValue("@pkey", DistrictID);
+
+                        using (var da = new MySqlDataAdapter(cmd))
+                        {
+                            da.SelectCommand.CommandTimeout = 0;
+                            DataTable objpacsDataTable = new DataTable("PacsDetails");
+                            da.Fill(objpacsDataTable);
+
+                            foreach (DataRow row in objpacsDataTable.Rows)
+                            {
+                                LegacyDataSignOff pa = new LegacyDataSignOff();
+                                pa.DCCBCode = Convert.ToInt32(row["DCCBPkey"]);
+                                pa.DCCBName = Convert.ToString(row["DCCBName"]);
+                                pdlist.Add(pa);
+                            }
+                        }
+
+                        // Move cmd.ExecuteNonQuery() to this location if needed.
+                        // cmd.ExecuteNonQuery();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    log.Error("Leaving GetDetailsbyDistrict - Error: " + ex);
+                    Console.WriteLine("An error occurred in GetDetailsbyDistrict  " + ex.Message);
+                }
+            }
+
+            return pdlist;
+        }
+
+        //public List<LegacyDataSignOff> GetDetailsbyDistrict(int? DistrictID, int? StateID)
+        //{
+        //    List<LegacyDataSignOff> pdlist = new List<LegacyDataSignOff>();
+        //    using (var conn = new MySqlConnection(mySqlConnectionStringBuilder.ConnectionString))
+        //    {
+        //        try
+        //        {
+        //            conn.Open();
+        //            string sqlquery = "select x.Pkey,y.DCCBPkey,y.DCCBName from (select distinct Pkey , DCCBCode from cm_dccbbranchmaster where pkey =@pkey )x join cm_dccbmaster y on x.DCCBCode = y.DCCBPkey";
+        //            using (MySqlCommand cmd = new MySqlCommand(sqlquery, conn))
+        //            {
+        //                cmd.Parameters.AddWithValue("@pkey", DistrictID);       
+        //                using (var cmd = new MySqlCommand(sqlquery, conn))
+        //                using (var da = new MySqlDataAdapter(cmd))
+        //                {
+        //                    da.SelectCommand.CommandTimeout = 0;
+        //                    DataTable objpacsDataTable = new DataTable("PacsDetails");
+        //                    da.Fill(objpacsDataTable);
+
+        //                    foreach (DataRow row in objpacsDataTable.Rows)
+        //                    {
+        //                        LegacyDataSignOff pa = new LegacyDataSignOff();
+        //                        pa.DCCBCode = Convert.ToInt32(row["DCCBPkey"]); ;
+        //                        pa.DCCBName = Convert.ToString(row["DCCBName"]);
+        //                        pdlist.Add(pa);
+        //                    }
+        //                    cmd.ExecuteNonQuery();
+        //                }
+        //            }
+        //        }
+
+        //        catch (Exception ex)
+        //        {
+        //            Console.WriteLine("An error occurred: " + ex.Message);
+        //        }
+        //    }
+
+        //    return pdlist;
+        //}
+
+        public List<LegacyDataSignOff> GetData(LegacyDataSignOff obj)
+        {
+            List<LegacyDataSignOff> pdlist = new List<LegacyDataSignOff>();
+
+            using (var conn = new MySqlConnection(mySqlConnectionStringBuilder.ConnectionString))
+            {
+                try
+                {
+                    conn.Open();
+                    string sqlquery = "SELECT DISTINCT DCCBBrID, DCCBBrName,DCCBCode FROM cm_pacsdetails JOIN cm_dccbbranchmaster ON DCCBBrID = Pkey";
+                    string sqlquery1 = "SELECT DISTINCT x.PacsId, x.GovtPacsID, x.PacsName, x.PacShortName, x.DCCBBrID, x.DCCBBrName,x.DCCBCode,y.UserName FROM( SELECT PacsId, GovtPacsID, PacsName, PacShortName, a.DCCBBrID, b.DCCBBrName,b.DCCBCode FROM cm_pacsdetails AS a LEFT JOIN cm_dccbbranchmaster AS b ON a.DCCBBrID = b.Pkey WHERE IsReadyForMigration = 0 OR IsReadyForMigration IS NULL) x left join tools_users y on x.PacsId= y.PacsIDPKey";
+
+                    using (var cmd = new MySqlCommand(sqlquery, conn))
+                    using (var da = new MySqlDataAdapter(cmd))
+                    {
+                        da.SelectCommand.CommandTimeout = 0;
+                        DataTable objpacsDataTable = new DataTable("PacsDetails");
+                        da.Fill(objpacsDataTable);
+
+                        foreach (DataRow row in objpacsDataTable.Rows)
+                        {
+                            LegacyDataMethods pd = new LegacyDataMethods();
+                            LegacyDataSignOff pa = new LegacyDataSignOff();
+                            pd.DCCBBrID = Convert.ToInt32(row["DCCBBrID"]);
+                            pd.DCCBBrName = Convert.ToString(row["DCCBBrName"]);
+                            pa.LegacyDataMethods = pd;
+                            pa.DCCBCode = Convert.ToInt32(row["DCCBCode"]);
+                            pdlist.Add(pa);
+                        }
+                    }
+
+                    using (var cmd1 = new MySqlCommand(sqlquery1, conn))
+                    using (var da1 = new MySqlDataAdapter(cmd1))
+                    {
+                        da1.SelectCommand.CommandTimeout = 0;
+                        DataTable objpacsDataTable1 = new DataTable("PacsDetails");
+                        da1.Fill(objpacsDataTable1);
+
+                        foreach (DataRow row in objpacsDataTable1.Rows)
+                        {
+                            LegacyDataSignOff pd = new LegacyDataSignOff();
+                            pd.PacsId = Convert.ToInt64(row["PacsId"]);
+                            pd.GovtPacsID = Convert.ToString(row["GovtPacsID"]);
+                            pd.PacsName = Convert.ToString(row["PacsName"]);
+                            pd.DCCBBrID = Convert.ToInt32(row["DCCBBrID"]);
+                            pd.DCCBBrName = Convert.ToString(row["DCCBBrName"]);
+                            pd.UserName = Convert.ToString(row["UserName"]);
+                            pd.DCCBCode = Convert.ToInt32(row["DCCBCode"]);
+                            pdlist.Add(pd);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Handle the exception appropriately, e.g., logging or rethrowing
+                    log.Error("Leaving GetData - Error: " + ex);
+                    Console.WriteLine("An error occurredin GetData " + ex.Message);
+                }
+            }
+
+            return pdlist;
+        }
+
+        public bool PostData(IList<LegacyDataSignOff> list)
+        {
+            using (MySqlConnection myconn = new MySqlConnection(mySqlConnectionStringBuilder.ConnectionString))
+            {
+                try
+                {
+                    myconn.Open();
+                    using (MySqlTransaction transaction = myconn.BeginTransaction())
+                    {
+                        foreach (var item in list)
+                        {
+                                    string insertQuery = "UPDATE cm_pacsdetails SET IsReadyForMigration = 1 WHERE PacsId = @PacsId AND DCCBBrID = @DCCBBrID";
+                            using (MySqlCommand cmd = new MySqlCommand(insertQuery, myconn, transaction))
+                                    {
+                                        cmd.Parameters.AddWithValue("@PacsId", item.PacsId);
+                                        cmd.Parameters.AddWithValue("@DCCBBrID", item.DCCBBrID);
+                                        cmd.ExecuteNonQuery();
+
+                                      }
+                                }
+                           
+                        transaction.Commit();
+                        return true;
+
+                    }
+                }
+                catch (Exception ex)
+                {
+
+                    // Log the exception details for debugging and analysis
+                    log.Error("Leaving PostData - Error: " + ex);
+                    Console.WriteLine("Error in PostData: " + ex.Message);
+                    return false;
+
+                }
+            }
+        }
+
+
+
+
+    }
+}
